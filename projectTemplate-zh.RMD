@@ -1,0 +1,612 @@
+ProsperLoanData Analyze
+========================================================
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, packages}
+# 加载你最终使用的所有组件
+# 在这个代码块的分析中。
+
+# 注意，在这个代码块中，将参数 "echo" 设为假。
+# This prevents the code from displaying in the knitted HTML output.这可以避免代码混入 HTML 输出显示。
+# 应当在文件中，对所有代码块设为 echo=FALSE 。
+
+library(ggplot2)
+library(RCurl)
+library(gridExtra)
+library(RColorBrewer)
+library(scales)
+library(GGally)
+library(memisc)
+library(corrplot)
+library(dplyr)
+```
+
+```{r echo=FALSE, Load_the_Data}
+# 加载数据
+URL="https://raw.githubusercontent.com/udacity/new-dand-advanced-china/master/%E6%8E%A2%E7%B4%A2%E6%80%A7%E6%95%B0%E6%8D%AE%E5%88%86%E6%9E%90/%E9%A1%B9%E7%9B%AE/prosperLoanData.csv"
+ldurl=getURL(URL)
+ld<- read.csv(textConnection(ldurl))
+```
+
+# 单变量绘图选择
+查看数据集结构和特征
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+dim(ld)
+```
+
+这个数据集拥有81个特征，这里不准备全部讨论，只是重点查看某些感兴趣的特征——共选取14个感兴趣的特征。
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+varnames <- c('ProsperRating..Alpha.', 'ProsperRating..numeric.', 
+              'LP_GrossPrincipalLoss', 'DebtToIncomeRatio', 
+              'MonthlyLoanPayment', 'LoanOriginalAmount',
+              'ListingCategory..numeric.', 'LoanCurrentDaysDelinquent', 
+              'LoanStatus', 'EstimatedReturn','ProsperScore',
+              'CurrentDelinquencies','AmountDelinquent',
+              'ProsperPrincipalOutstanding')
+ld_sub <- ld[,varnames]
+
+str(ld_sub)
+```
+
+首先查看prosper的自定义评级。运行str()后，发现A和AA顺序错误，因此需要修改。且信用未登记的条目并没有对应的文字显示，只是一个空值，因此还要在坐标图中将空值改为“NA”来注明。同时还发现ProsperRating..numeric.包含空值，但是特征说明中规定空值NA应为0，因此也需要修改。
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ld_sub$ProsperRating..numeric. <- with(ld_sub, 
+                                       ifelse(is.na(ProsperRating..numeric.), 
+                                              0, ProsperRating..numeric.))
+ld_sub$ProsperRating..Alpha. <- ordered(ld_sub$ProsperRating..Alpha., 
+                                levels=c('','HR','E','D','C','B','A','AA'))
+
+table(ld_sub$ProsperRating..Alpha.)
+table(ld_sub$ProsperRating..numeric.)
+```
+
+修改特征后的prosper的自定义评级分布如下图。
+```{r echo=FALSE, message=FALSE, warning=FALSE, Univariate_Plots}
+#创建绘制条形图函数
+create_barplot <- function(varname){
+  return(ggplot(aes_string(x=varname), data=ld_sub) +geom_bar())
+}
+
+#创建绘制直方图函数
+create_hisplot <- function(varname, data, binwidth){
+  return(ggplot(aes_string(x=varname), data=data) 
+         +geom_histogram(binwidth = binwidth))
+}
+
+#信用评级分布
+p1 <- create_barplot('ProsperRating..Alpha.') +
+  scale_x_discrete(labels=c('NA','HR','E','D','C','B','A','AA'))
+p2 <- create_barplot('ProsperRating..numeric.') +
+  scale_x_continuous(breaks=0:7)
+grid.arrange(p1,p2,ncol=1)
+```
+
+忽略未登记信用评级的条目，可以看到信用评级趋于正态分布，C评级的人数最多，AA最高评级的人数最少。
+
+之后查看风险系数(应按照特征说明将1-11更改0-10，并改为因子变量，为了后面计算相关系数方便，因此保留num特征，并新建一个因子变量)、贷款用途(和风险系数处理的方法相同，保留原变量，转换因子变量并新建)、贷款初始金额、预估回报分布、借贷收入比、按月还贷额的分布。
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#风险系数
+ld_sub$ProsperScore <- ld_sub$ProsperScore-1
+ld_sub$ProsperScore..factor. <- factor(ld_sub$ProsperScore)
+table(ld_sub$ProsperScore..factor.)
+create_barplot('ProsperScore..factor.')
+```
+
+忽略风险系数未登记的条目的话，可以看出此特征也呈现正态分布的趋势，3-7的数量稍多，但也有小波动，因此并不是严格的正态分布。最少数量的风险系数是0。
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#贷款用途
+ld_sub$ListingCategory..numericF. <- factor(
+  ld_sub$ListingCategory..numeric.)
+table(ld_sub$ListingCategory..numericF.)
+create_barplot('ListingCategory..numericF.')
+```
+
+贷款用途分布中，1-DebtConsolidation的数量是最多的。忽略0-NotAvailabel，7-Other的数量排在第二位，2-HomeImprovement和3-Business二者数量也稍多一些，剩下的则普遍很少。
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#贷款初始金额
+summary(ld_sub$LoanOriginalAmount)
+create_hisplot('LoanOriginalAmount', ld_sub, 1000) +
+  scale_x_continuous(breaks=seq(1000, 35000, 2500))
+```
+
+贷款初始金额分布可以看到三个明显的划分区间：最小值1000-10000，10000-25000，25000以上，75%的人借款不会超过12000。4000、10000、15000可以看到是明显的区间内峰值，可能和平时的“取整”习惯有关。最大借款额为35000。
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#预估回报
+summary(ld_sub$EstimatedReturn)
+create_hisplot('EstimatedReturn', ld_sub, 0.005) +
+  scale_x_continuous(breaks=seq(-0.183,0.284,0.05))
+```
+
+预估回报也可以粗略看成正态分布，且median和mean的值相差不多。可以看到大部分预估回报都在0.017和0.192之间，75%的预估回报不会超过0.117。但同时也可以看到，有的预估回报是负数，即最小值并不是0。最大回报率也不超过0.284。
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#新建一个省略函数
+omit_top <- function(varia, ratio){
+  return(quantile(varia, prob=ratio))
+}
+
+#借贷收入比
+summary(ld_sub$DebtToIncomeRatio)
+omit_top_DTI <- omit_top(ld_sub$DebtToIncomeRatio[!is.na(
+  ld_sub$DebtToIncomeRatio)],0.95)
+p1 <- create_hisplot('DebtToIncomeRatio',ld_sub, 0.01) 
+p1
+p1+coord_cartesian(xlim=c(0, omit_top_DTI))+
+  scale_x_continuous(breaks=seq(0, omit_top_DTI, 0.05))
+```
+
+一部分的借贷收入比超过了1000%(被标记为10.1的条目)。忽略top5%放大来看分布情况。借贷收入比在0.15到0.2的人居多，75%的人的借贷收入比在0.32以内，是一个可以负担得起的比值。
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#按月还贷额
+summary(ld_sub$MonthlyLoanPayment)
+omit_top_MLP <- omit_top(ld_sub$MonthlyLoanPayment[!is.na(
+  ld_sub$MonthlyLoanPayment)],0.95)
+p1 <- create_hisplot('MonthlyLoanPayment', ld_sub, 25) 
+p1
+p1+coord_cartesian(xlim=c(0,omit_top_MLP)) +
+  scale_x_continuous(breaks=seq(0, omit_top_MLP, 50))
+```
+
+75%的人按月还贷额在371.6以内，最大额为2251.5，平均为272.5。但是高额按月还贷的分布很广而且密度稀，因此忽略top5%再查看分布。每月还贷175是频率最大值，图中三个最明显的区间就是0-175，175-400，400以上，金额越高，频率越低。
+
+查看贷款状态分布，原始图显示有序因子的排序有错误，需要修改。修改后如图。
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ld_sub$LoanStatus <- ordered(ld_sub$LoanStatus, 
+                    levels=c('Cancelled','Chargedoff','Completed','Current',
+                             'Defaulted','Final PaymentInProgress',
+                             'Past Due (1-15 days)',
+                             'Past Due (16-30 days)',
+                             'Past Due (31-60 days)',
+                             'Past Due (61-90 days)',
+                             'Past Due (91-120 days)',
+                             'Past Due (>120 days)'))
+
+#贷款状态分布
+table(ld_sub$LoanStatus)
+create_barplot('LoanStatus') +
+  theme(axis.text.x = element_text(angle=45,hjust=1))
+```
+
+可以看到，大部分的贷款还是处于正常交易中的。
+
+查看拖欠天数分布和贷款总耗损金额分布。在查看分布时发现大部分拖欠天数和耗损金额都为0，因此重点查看大于0的拖欠天数和耗损金额分布。由于天数分布较广，因此图中设置binwidth为30，令天数按照月份为单位来划分，x轴则按年数显示天数，同时x轴改为“年数”。
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#拖欠天数
+summary(ld_sub$LoanCurrentDaysDelinquent)
+create_hisplot('LoanCurrentDaysDelinquent',
+              subset(ld_sub, LoanCurrentDaysDelinquent>0), 30) +
+  scale_x_continuous(breaks=seq(0,2704,365),labels=0:7) +
+  xlab('LoanCurrentYearsDelinquent')
+```
+
+图中可以看到两个拖欠年数的波动，转折点在3年。但通过summary可以看出来75%的借款是没有拖欠的，但最大的年数也是7年多了。大部分的拖欠年数也都在两年内，在长久拖欠区间内，高峰值是五年半。
+
+查看贷款总耗损的分布。
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#贷款总耗损  
+summary(ld_sub$LP_GrossPrincipalLoss)
+create_hisplot('LP_GrossPrincipalLoss',
+              subset(ld_sub, LP_GrossPrincipalLoss>0), 250) +
+  scale_x_continuous(breaks=seq(0, 25000, 1000)) +
+  theme(axis.text.x = element_text(angle=45,hjust=1))
+```
+
+通过summary可以看到，75%的借款是没有损耗的，但最大的耗损也达到了25000。大部分耗损都在15000以内，5000以上的贷款耗损密度并不大，但是分布较广。
+
+查看先前贷款的拖欠账户数目和拖欠总额。
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#先前贷款的拖欠账户数目
+summary(ld_sub$CurrentDelinquencies)
+omit_top_CD <- omit_top(
+  ld_sub$CurrentDelinquencies[!is.na(ld_sub$CurrentDelinquencies)],0.95)
+
+p1 <- create_hisplot('CurrentDelinquencies',ld_sub, 1) 
+p1
+p1+coord_cartesian(xlim=c(0, omit_top_CD)) +
+  scale_x_continuous(breaks=seq(0, omit_top_CD, 1))
+```
+
+通过summary可以看出，大部分之前有借款记录的人并没有拖欠，最大的拖欠账户数目可达83个。如果忽略top5的话，会发现95%的拖欠账目少于4。
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#先前贷款的拖欠总额
+summary(ld_sub$AmountDelinquent)
+omit_top_AD <- omit_top(
+  ld_sub$AmountDelinquent[!is.na(ld_sub$AmountDelinquent)],0.95)
+
+p1 <- create_hisplot('AmountDelinquent',ld_sub, 500)
+p1
+p1+coord_cartesian(xlim=c(0, omit_top_AD)) +
+  scale_x_continuous(breaks=seq(0, omit_top_AD, 500))
+```
+
+通过summary可以看出，大部分之前有借款记录的人并没有拖欠，最大的拖欠总金额可达463881，已经远远超过之前看到的贷款耗损总额了，猜测可能此条目不止一个拖欠账户（通过代码查看得知是3个，平均额依旧很高）。如果忽略top5的话，会发现95%的拖欠总额小于4000，大部分也都在1500元以内。
+
+最后查看先前贷款的未偿还金额。
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#先前贷款的未偿还金额
+summary(ld_sub$ProsperPrincipalOutstanding)
+create_hisplot('ProsperPrincipalOutstanding', ld_sub, 250)
+```
+
+75%的先前贷款的拖欠金额不超过4127，最高额为23451，和之前看到的贷款耗损的最高值差不多。大部分的拖欠不会超过15000。这个特征的分布和贷款总耗损有一定的相似之处。
+
+# 单变量分析
+
+### 你的数据集结构是什么？
+这个数据集包含113937条记录，每条记录有81个特征，或者说本数据集一共包含81条特征。
+
+其中观察到的有序因子变量为：
+1.ProsperRating..Alpha.，排除空值顺序由低到高为：'HR','E','D','C','B','A','AA'。
+2.ProsperRating..numeric.，排除0代表的空值，信用评级随着数字的升高而升高。
+3.LoanStatus，顺序为：'Cancelled','Chargedoff','Completed','Current','Defaulted','Final PaymentInProgress','Past Due (1-15 days)','Past Due (16-30 days)','Past Due (31-60 days)','Past Due (61-90 days)','Past Due (91-120 days)','Past Due (>120 days)'。
+4.ProsperScore，随着数字的升高，风险越小。
+
+观察到的特性有：
+信用评级、风险系数、预估回报都可以看成正态分布，剩下的几乎所有的特征都是长尾分布，拖欠天数更是可以看成由两个正态分布组成的长尾分布。
+先前贷款未偿还额和总拖欠的几个数据点和贷款总耗损的几个数据点很相近，例如大部分的贷款耗损和先前未偿还额都不会超过15000，且最大额是在25000或接近25000。
+
+### 你的数据集内感兴趣的主要特性有哪些？
+我所感兴趣的主要特征就是EstimatedReturn预估回报和LP_GrossPrincipalLoss贷款总耗损。这二者猜测也许都和ProsperRating信用评级和ProsperScore风险系数有些关系。
+
+### 你认为数据集内哪些其他特征可以帮助你探索兴趣特点？
+按月还贷额、借贷比、拖欠时间和一些耗损记录应该也可以结合信用评级和风险系数用来预估耗损和回报。
+
+### 根据数据集内已有变量，你是否创建了任何新变量？
+并未创建新变量。
+
+### 在已经探究的特性中，是否存在任何异常分布？你是否对数据进行一些操作，如清洁、调整或改变数据的形式？如果是，你为什么会这样做？
+信用评级，发现A和AA顺序错误，并且为了和数字信用评级的顺序一样，因此需要重新排列字母信用评级——更改A和AA的错误顺序，把NA排为第一个。且数字评级包含空值，但是特征说明中规定空值NA应为0，因此也进行了修改。
+风险系数应按照特征说明将1-11更改0-10，并改为因子变量，但为了后面计算相关系数方便，因此保留num特征，并新建一个因子变量。
+贷款用途和风险系数处理的方法相同，保留原变量，转换因子变量并新建。
+贷款状态分布中有序因子的排序有错误，也进行了修改。
+
+
+# 双变量绘图选择
+筛选出可以计算相关性的特征，进行相关矩阵和GGPAIRS绘制。
+```{r echo=FALSE, message=FALSE, warning=FALSE, Bivariate_Plots}
+ld_cor <- subset(ld_sub, select=-c(ListingCategory..numericF.,
+                                   ProsperScore..factor.,
+                                   ProsperRating..Alpha.,
+                                   LoanStatus))
+
+ggcorr(ld_cor, label=TRUE, label_round=2, label_alpha=TRUE, label_size=3,
+       hjust=0.9, layout.exp=4)
+
+#cor_matrix <- round(cor(subset(ld_cor), use='pairwise.complete.obs'),2)
+#corrplot(cor_matrix, method='color', order='hclust')
+```
+
+从ggcor图中可以找到关系系数最高的几对特征就是贷款初始金额和按月还贷额(0.932)、风险分数和信用评级(0.705)、信用评级和预估回报(-0.66)、拖欠天数和贷款总耗损(0.534)。因此我们可以知道，对耗损和预估回报起到直接影响的特征应该是拖欠天数、评级和风险系数。观察相关系数矩阵我们可以推测出，月付款和贷款初始金额可能会通过和信用评级的关系间接影响预估回报。
+
+首先查看拖欠天数和总耗损。
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#创建一个绘制pointplot函数
+create_pointplot <- function(varname_x, varname_y, data_sub){
+  return(ggplot(aes_string(x=varname_x, y=varname_y), data=data_sub)+
+  geom_point(alpha=0.3))
+}
+
+#创建一个绘制boxplot函数
+create_boxplot <- function(varname_x,varname_y,data_sub){
+  return(ggplot(aes_string(x=varname_x, y=varname_y), 
+                data=data_sub) +
+  geom_boxplot() +
+  stat_summary(fun.y=mean, geom='point', shape=4, color='red'))
+}
+
+#拖欠天数-贷款总耗损
+cor.test(ld_sub$LoanCurrentDaysDelinquent, ld_sub$LP_GrossPrincipalLoss)
+create_pointplot('LoanCurrentDaysDelinquent','LP_GrossPrincipalLoss',ld_sub) +
+  scale_x_continuous(breaks=seq(0,2704,365),labels=0:7) +
+  xlab('LoanCurrentYearsDelinquent')
+```
+
+贷款耗损先是随着拖欠天数的增加，而密度下降，但在2-3年这个区间则有个转折，而后耗损密度加大。高额耗(大于15000)在拖欠一年内和拖欠4-6年的区间内密度稍高。
+
+然后查看信用评级、风险系数分别和预估回报的关系。
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#信用评级-预估回报
+cor.test(ld_sub$ProsperRating..numeric., ld_sub$EstimatedReturn)
+p1 <- create_boxplot('ProsperRating..Alpha.', 'EstimatedReturn',
+               subset(ld_sub, ProsperRating..Alpha.!=''))
+p1
+p1+coord_cartesian(ylim=c(0.017,0.192))+
+  scale_y_continuous(breaks=seq(0.017,0.192,0.01))
+```
+
+第一幅图中可以看出各个评级预估回报的IQR在0.05-0.2区间内，但这里选择0.017-0.192这一区间来放大箱图，因为从上面的直方图分布中，可以看出大部分的预估回报都这一区间。各信用评级预估回报的1.5倍IQR值随着信用评级的由高到低是二次凸函数的变化趋势；但平均值和中位值则是随着信用评级的升高而降低（只是HR的平均值比E的略低，猜测可能是异常低值将平均值拉下）。总体来说，预估回报较高的点基本分布在E和D评级中，C评级也有少量回报很高的点（异常值），HR评级拥有着回报率最低甚至是负回报的点（异常值）。A和AA的IRQ在总预估回报平均值0.096以下。
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+cor.test(ld_sub$ProsperScore, ld_sub$EstimatedReturn)
+p1 <- create_boxplot('ProsperScore..factor.', 'EstimatedReturn',
+  subset(ld_sub, !is.na(ProsperScore..factor.)))
+p1
+p1+coord_cartesian(ylim=c(0.017,0.192))+
+  scale_y_continuous(breaks=seq(0.017,0.192,0.01))
+```
+
+依旧放大到0.017-0.192这个区间，发现虽然均值和中位值的变化小有波动，但都是呈现预估回报随着风险系数的升高（风险系数越高，风险越小）而下降的趋势。忽略异常值的话，4、5、6系数有着回报最高的点，同时也包含一些负回报的异常点。包含负回报最多的就是0风险系数。因此从相反的方向来看，预估回报的各个均值和中位值虽然随着风险系数(安全性)的升高而呈现总体降低的趋势，但是各风险系数预估回报的最低值却是升高的趋势，可以说是安全性越来越高。信用评级同理。
+
+信用评级和风险系数有着跟高的相关度，下面进行查看。
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+cor.test(ld_sub$ProsperScore, ld_sub$ProsperRating..numeric.)
+ld_sur.groupBP <- ld_sub %>%
+  group_by(ProsperRating..Alpha.,ProsperScore..factor.) %>%
+  summarise(n=n()) %>%
+  ungroup()
+
+ggplot(aes(x=ProsperScore..factor., y=ProsperRating..Alpha.),
+       data=subset(ld_sur.groupBP, ProsperRating..Alpha.!=''))+
+  geom_point(aes(size=n))
+```
+
+在传送数据集的时候，只是删去了信用评级为空的条目，但是图中也并没有看到风险系数为空的条目，看来这两个特征的缺失是“同时性的”。可以看到风险与信用评估是具有方向一致性的，基本都是双底或者双高，很少有一高一低的记录。
+
+接下来查看按月还贷额、贷款初始金额分别和信用评级的关系。
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+cor.test(ld_sub$ProsperRating..numeric., ld_sub$MonthlyLoanPayment)
+p1 <- create_boxplot('ProsperRating..Alpha.', 'MonthlyLoanPayment', 
+               subset(ld_sub,ProsperRating..Alpha.!='')) +
+  scale_y_continuous(breaks=seq(0,2252,100))
+p1
+p1+coord_cartesian(ylim=c(0,1000))
+```
+
+按月还贷额的均值和中位值都是随着信用评级的提高而增大。可以看出大部分按月还贷额都在400以下，HR和E的按月还贷额分布要比其他几个信用评级的窄，且集中在250元以下，也可以说并没有超过总体按月还贷额均值（272.5）。前四个信用评级的按月还贷额分布很相似，超过400元以上的条目确实很少。
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+cor.test(ld_sub$ProsperRating..numeric., ld_sub$LoanOriginalAmount)
+create_boxplot('ProsperRating..Alpha.', 'LoanOriginalAmount', 
+               subset(ld_sub, ProsperRating..Alpha.!='')) +
+  scale_y_continuous(breaks=seq(0,35000,1000))
+```
+
+贷款初始金额和信用评级的分布特征和按月还贷金额非常接近。25000以上的贷款条目非常少。
+
+在相关系数矩阵中，关系最密切的就是贷款初始金额和按月还贷额，下面查看这二者的关系。
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+cor.test(ld_sub$LoanOriginalAmount, ld_sub$MonthlyLoanPayment)
+create_pointplot('LoanOriginalAmount', 'MonthlyLoanPayment', ld_sub)
+```
+
+可以明显得看到几组线性关系，一小部分的斜率很大。根据上面的相关系数猜测，这几簇线性关系的划分也许和信用评级或者风险系数(由于风险系数和信用评级的高相关性)有关。
+
+# 双变量分析
+
+### 探讨你在这部分探究中观察到的一些关系。这些感兴趣的特性与数据集内其他特性有什么区别？
+风险系数和信用评级是相辅相成的关系，预估回报都随着二者的升高而下降。贷款耗损和拖欠天数并不能用简单的一次线性函数关系来表示，无论是耗损密度还是耗损值都有类似二次凹函数的关系，不只是拖欠密度大于15000的高额耗损密度在拖欠一年内和4-6年内也较高。按月还贷额和贷款初始金额有着很密切的关系，贷款初始金额越高，按月还贷额越高。
+
+### 你是否观察到主要特性与其他特性之间的有趣关系？
+信用评级和很多其他特性都有着或多或少的关系。评级越高，月付款和初始金额都越高。
+
+### 你发现最强的关系是什么？
+贷款初始金额越高，按月还贷额越高。
+
+# 多变量绘图选择
+首先查看不同信用评级下的预估回报和总耗损的密度分布。
+```{r echo=FALSE, message=FALSE, warning=FALSE, Multivariate_Plots}
+#预估回报密度分布和信用评级
+ggplot(aes(x=EstimatedReturn), 
+       data=subset(ld_sub, ProsperRating..Alpha.!='')) +
+  geom_density(aes(color=ProsperRating..Alpha.)) +
+  scale_color_brewer(type='dive', palette='Set1') +
+  coord_cartesian(xlim=c(0.05,0.18))
+
+#贷款总耗损密度分布和信用评级
+ggplot(aes(x=LP_GrossPrincipalLoss), 
+  data=subset(ld_sub, (ProsperRating..Alpha.!='')&(LP_GrossPrincipalLoss>0))) +
+  geom_density(aes(color=ProsperRating..Alpha.)) +
+  scale_color_brewer(type='dive', palette='Set1')
+```
+
+B、A、AA这三个评级的回报分布随着信用评级的升高而往低回报方向平移，且低回报的密度还在升高。D和E在稍高回报的区间分布较广且平缓，HR的高回报区间虽然窄，但是密度分布却有个不小的高峰。可以看出来，预估回报是随着信用评级的升高而降低的。
+HR和E这样低评级的总耗损在小额区间内有着很高的密度，高信用评级的耗损虽然密度一直都很低缓，但是额度分布广，且像A和AA这种评级内的最大耗损就是整体耗损的最大值了。
+
+之前在查看贷款初始金额和按月还贷额的关系时，发现图中线性关系虽然明显，但却有不同斜率的几簇线。由于猜测可能是信用评级的关系，因此查看不同信用评级下，贷款初始金额和按月还贷额的关系。
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#贷款初始金额-按月还贷额-信用评级
+ggplot(aes(x=LoanOriginalAmount, y=MonthlyLoanPayment),
+             data=subset(ld_sub, ProsperRating..Alpha.!='')) +
+  geom_point(aes(color=ProsperRating..Alpha.))+
+  scale_color_brewer(type='div', palette='Set3')
+
+ggplot(aes(x=LoanOriginalAmount, y=MonthlyLoanPayment), 
+             data=subset(ld_sub, ProsperRating..Alpha.!='')) +
+  geom_point(alpha=0.3, colour='grey60') +
+  geom_smooth(aes(color=ProsperRating..Alpha.)) +
+  scale_color_brewer(type='div', palette='Set3')
+```
+
+起初，我认为还贷率(上升速率)最高的那条线可能是信用评级较高的，但是画中所示却是几个评级混合起来的。之后将点的颜色调灰后，在画出各个评级的平滑线后，发现各评级的平滑线的速率基本都集中在点多的区域内，与我最开始猜测的正好相反——速率高的线反而是信用评级最低的HR，而高信用评级的几条线速率反而低一些。
+
+接下来查看是否和风险分数有关。
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#贷款初始金额-按月还贷额-风险分数
+ggplot(aes(x=LoanOriginalAmount, y=MonthlyLoanPayment), 
+       data=subset(ld_sub, !is.na(ProsperScore..factor.))) +
+  geom_point(aes(color=ProsperScore..factor.))+
+  scale_color_brewer(type='div', palette='Set3')
+
+ggplot(aes(x=LoanOriginalAmount, y=MonthlyLoanPayment), 
+       data=subset(ld_sub, !is.na(ProsperScore..factor.))) +
+  geom_point(alpha=0.3, colour='grey60') +
+  geom_smooth(aes(color=ProsperScore..factor.)) +
+  scale_color_brewer(type='div', palette='Set3')
+```
+
+最上面的一条线依旧是“混合”的，风险分数与斜率的关系和信用评级差不多，基本上是越安全的，斜率越低。
+
+预估回报和信用评级相关，初始金额和月付额都和信用评级相关，可以查看这三者对于预估回报的影响。
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#预估回报-信用评级-初始金额-月付额
+ld_sub$MonthlyPay <- 
+  cut(ld_sub$MonthlyLoanPayment[!is.na(ld_sub$MonthlyLoanPayment)], 
+      breaks=c(0, 175, 400, Inf),
+      labels=c('<175','175-400','>400'))
+
+p1 <- ggplot(aes(x=LoanOriginalAmount, y=EstimatedReturn), 
+       data=subset(ld_sub, (!is.na(MonthlyPay))&(ProsperRating..Alpha.!=''))) +
+  geom_point(aes(color=ProsperRating..Alpha., shape=MonthlyPay)) +
+  scale_shape_manual(values=c(1,4,2)) +
+  scale_color_brewer(type='div', palette='Set3') +
+  theme_dark()
+p1
+p1+coord_cartesian(ylim=c(0.04,0.15), xlim=c(0,25000))
+```
+
+信用评级在预估回报的分布上明显存在着分层，这和上面的不同信用评级下的预估回报分布所显示的结果一样。大于25000的高额贷款的密度很低，在x轴的方向上，似乎存在一个小于10000元贷款和大于10000小于25000的分层。可以发现，高额贷款的预估回报并不高只是最终收敛于0.05-0.1的回报区间内。将图片聚焦到密集范围内，会发现按月还贷额的三个cut正好分别集中在贷款初始额的三个区间内，但并不是完全分割，还是各有掺杂。而且可以看出来图中的点是呈竖条状分布的，因为人们一般很少是有零有整的贷款，一般都是取整。
+
+通过上面的双变量分析，我们观察出风险系数对于预估回报似乎有着和信用评级对预估回报同样的影响，可以将月付额换成风险系数，查看这三者对于预估回报的影响。
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#风险分数-信用评级-预估回报-贷款初始金额
+ld_sub.retloan <- ld_sub %>%
+  filter(ProsperRating..Alpha.!='')%>%
+  group_by(ProsperRating..Alpha., ProsperScore..factor.) %>%
+  summarise(mean_loan=mean(LoanOriginalAmount),
+            mean_return=mean(EstimatedReturn))%>%
+  ungroup()
+
+ggplot(aes(x=ProsperScore..factor., y=ProsperRating..Alpha.), 
+       data=ld_sub.retloan)+
+  geom_point(aes(size=mean_return, color=mean_loan)) +
+  scale_size_area(max_size=10, guide=FALSE) +
+  scale_color_gradient(high='#610B0B', low='#F5A9A9')
+```
+
+这张图同样表明了一点——并不是贷款初始金额越高，预估回报就越大，而是预估回报大的，往往是信用评级不处于中等偏下的点。需要强调的是，右下角的点表示着低贷款但是高回报，但结合风险-信用图来看，这种特征的点其实数量很少。
+
+虽然信用评级中等偏下的点有着较高的预估回报，但是耗损应该也要被考虑进去。把贷款初始额换成耗损，再来查看它和信用评级、风险系数、预估回报的关系。
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#风险分数-信用评级-预估回报-总耗损
+ld_sub.retloss <- ld_sub %>%
+  filter(ProsperRating..Alpha.!='')%>%
+  group_by(ProsperRating..Alpha., ProsperScore..factor.) %>%
+  summarise(mean_loss=mean(LP_GrossPrincipalLoss),
+            mean_return=mean(EstimatedReturn))%>%
+  ungroup()
+
+ggplot(aes(x=ProsperScore..factor., y=ProsperRating..Alpha.), 
+       data=ld_sub.retloss)+
+  geom_point(aes(size=mean_return, color=mean_loss)) +
+  scale_size_area(max_size=10, guide=FALSE) +
+  scale_color_gradient(high='#610B0B', low='#F5A9A9')
+```
+
+从HR-0到AA-10的粗略变化趋势是，高耗损和高回报-低耗损和低回报。再次强调，右下角的点表示着低耗损但是高回报，但结合风险-信用图来看，这种特征的点其实数量很稀少。看来低耗损-高回报，很难同时满足。
+
+其实拖欠天数是对耗损影响有最大影响的，同时评级也影响着拖欠天数和初始金额，所以猜测评级和初始金额可能通过和拖欠天数的关系，也影响贷款耗损。
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#总耗损-拖欠天数-信用评级-贷款初始额
+top_year <- ceiling(max(ld_sub$LoanCurrentDaysDelinquent)/365)*365
+ld_sub$YearCut <- 
+ cut(ld_sub$LoanCurrentDaysDelinquent[
+   !is.na(ld_sub$LoanCurrentDaysDelinquent)], 
+      breaks=seq(0,top_year,730),
+      labels=c('<2','2-4','4-6','>6'))
+
+p1 <- ggplot(aes(x=LoanOriginalAmount, y=LP_GrossPrincipalLoss), 
+  data=subset(ld_sub, (!is.na(YearCut))&
+    (ProsperRating..Alpha.!='')&(LP_GrossPrincipalLoss>0))) +
+  geom_point(aes(shape=YearCut, color=ProsperRating..Alpha.)) +
+  scale_shape_manual(values=c(1,4,2,3)) +
+  scale_color_brewer(type='div', palette='Set3') +
+  theme_dark()
+p1
+p1+coord_cartesian(xlim=c(1000,15000),ylim=c(0,15000))
+```
+
+只看有耗损的记录，可以发现确实是贷款初始金额越高，若是发生耗损的话，那么也一定是水涨船高，且高额耗损的信用评级也高，原因可能是低信用评级的借款额度不会很高。但是高额耗损的拖欠天数基本都是2年以内，只看到一个4-6年的点且信用评级是C。其中有趣的一点是，我们并没有看到大于6年的点，猜测原因可能是记录中信用评级未知。放大集中区域，也会发现这些点呈现着信用评级的分层和竖条状分布。而且拖欠年数还是以小于2年居多，无论是耗损高低。2-4年的拖欠也基本集中在低耗损区域。和上面耗损-拖欠时间的分布不同的一点是，图中4-6年拖欠的点数并不多，可能是这些记录的信用评级都未知。
+
+
+最后，可以将贷款初始金额换成和信用评级有着密切关系的风险系数，来查看评级和风险系数怎样通过拖欠天数影响着耗损。
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#信用评级-风险系数-拖欠天数-总耗损
+ld_sub.dayloss <- ld_sub %>%
+  filter(ProsperRating..Alpha.!='')%>%
+  group_by(ProsperRating..Alpha., ProsperScore..factor.) %>%
+  summarise(mean_loss=mean(LP_GrossPrincipalLoss),
+            mean_day=mean(LoanCurrentDaysDelinquent))%>%
+  ungroup()
+
+ggplot(aes(x=ProsperScore..factor., y=ProsperRating..Alpha.), 
+       data=ld_sub.dayloss)+
+  geom_point(aes(size=mean_day, color=mean_loss)) +
+  scale_size_area(max_size=10, guide=FALSE) +
+  scale_color_gradient(high='#610B0B', low='#F5A9A9')
+```
+
+可以直接看到的是，大面积的点基本集中在低评级，HR-0是一个很危险的特征，这个特征往往表示长时间的拖欠、高耗损、低回报，当然贷款初始额也不会很高。4、5、6、7虽然有着高预估回报（上图显示），但也存在拖欠时间和耗损稍大的风险。最安全——低耗损、拖欠短的就是高风险系数（高安全性）且信用评级高，但是正如前一图所示，回报也低。
+
+
+# 多变量分析
+
+###  探讨你在这部分探究中观察到的一些关系。通过观察感兴趣的特性，是否存在相互促进的特性？
+一般来说信用评级和风险系数（安全性）都是双高或者双低的。耗损随着二者的增加而降低，但是预估回报也在降低。高额贷款基本发生在高信用评级上，因此不能单纯说，贷款本金越高预估回报就越高，反而这些高额贷款的回报最后只收敛于0.05-0.1的回报区间内。虽然也有高回报且低耗损，但不排除那些记录属于异常的可能。因此可以总结为越安全，贷款金额越大，但是耗损越小，可同时预估回报也越小；越危险，贷款金额越小，但是损失越大（不会超过本身贷款金额，是同高信用评级和安全性来比较），但是预估回报也越大。
+
+### 这些特性之间是否存在有趣或惊人的联系呢？
+贷款初始金额越高，如果发生耗损的话，耗损金额也会水涨船高。正如上面说的，高额贷款基本发生在高信用评级上，因此高信用评级的预估回报也可能是受此影响。
+
+### 选项：你是否创建过数据集的任何模型？讨论你模型的优缺点。
+
+------
+
+# 定稿图与总结
+
+### 绘图一
+```{r echo=FALSE, message=FALSE, warning=FALSE, Plot_One}
+ggplot(aes(x=EstimatedReturn), 
+       data=subset(ld_sub, ProsperRating..Alpha.!='')) +
+  geom_density(aes(color=ProsperRating..Alpha.)) +
+  scale_color_brewer(type='dive', palette='Set1') +
+  ggtitle('Density of Estimated Return by Prosper Rating') +
+  labs(color='Prosper Rating') +
+  theme(panel.grid.minor = element_blank())
+```
+
+### 描述一
+B、A、AA这三个评级的回报分布随着信用评级的升高而往低回报方向平移，且低回报的密度还在升高。D和E在稍高回报的区间分布较广且平缓，HR的高回报区间虽然窄，但是密度分布却有个不小的高峰，但HR也有着低回报甚至是负回报的记录。但总体上可以看出来，预估回报是随着信用评级的升高而降低的。
+
+### 绘图二
+```{r echo=FALSE, message=FALSE, warning=FALSE, Plot_Two}
+ggplot(aes(x=LoanOriginalAmount, y=EstimatedReturn), 
+       data=subset(ld_sub, (!is.na(MonthlyPay))&(ProsperRating..Alpha.!=''))) +
+  geom_point(aes(color=ProsperRating..Alpha., shape=MonthlyPay)) +
+  scale_shape_manual(values=c(1,4,2)) +
+  scale_color_brewer(type='div', palette='Set3') +
+  ggtitle('Estimated Return by Loan OriginalAmount of
+          Monthly Payment and Prosper Rating') +
+  labs(color='Prosper Rating', shape='Montyly Payment') +
+  theme_dark()
+```
+
+### 描述二
+信用评级在预估回报的分布上明显存在着分层，这和上面的不同信用评级下的预估回报分布所显示的结果一样。大于25000的高额贷款的密度很低，在x轴的方向上，似乎存在一个小于10000元贷款和大于10000小于25000的分层。可以发现，高额贷款的预估回报并不高只是最终收敛于0.05-0.1的回报区间内。将图片聚焦到密集范围内，会发现按月还贷额的三个cut正好分别集中在贷款初始额的三个区间内，但并不是完全分割，还是各有掺杂。而且可以看出来图中的点是呈竖条状分布的，因为人们一般很少是有零有整的贷款，一般都是取整。
+
+### 绘图三
+```{r echo=FALSE, message=FALSE, warning=FALSE, Plot_Three}
+ggplot(aes(x=ProsperScore..factor., y=ProsperRating..Alpha.), 
+       data=ld_sub.retloss)+
+  geom_point(aes(size=mean_return, color=mean_loss)) +
+  scale_size_area(max_size=10, guide=FALSE) +
+  scale_color_gradient(high='#610B0B', low='#F5A9A9') +
+  ggtitle('Prosper Rating by Prosper Score of Loss-mean and Return-mean') +
+  labs(color='Loss-mean', size='Return-mean')
+```
+
+### 描述三
+从HR-0到AA-10的粗略变化趋势是，高耗损和高回报-低耗损和低回报。再次强调，右下角的点表示着低耗损但是高回报，但结合风险-信用图来看，这种特征的点其实数量很稀少。看来低耗损-高回报，很难同时满足。
+
+
+-------
+
+# 反思
+起初，我总是希望寻找主要特征间的一定线性关系，但是有的变量间就是不会存在线性关系，例如拖欠时间和总耗损。后来我才反思到，当我们在接触数据集的时候，可以假想和推测，但不可以直接就肯定，要接受数据所表现出来的现象，尽管有的时候和推测并不一样。
+但是这个表中因为一些原因，某些特征并不完整，例如信用评级和风险系数就有很多缺省值，而信用评级是分析中很重要的一个特征，因此得到的推测也很有局限性。若是可以补充客户的风险系数和信用评级，那么基于数据的分析则会更完善一些。正如上面分析看到的，信用评级和很多其他的特征都有或多或少的关系，如果可以更全面地搜集有关系的特征，例如收入借贷比，或者月收入，也许可以帮助完善信用评级的条目，当然其他未讨论的特征也许和信用评级也有关系（例如是否有房屋抵押），这需要进一步的分析确定。
